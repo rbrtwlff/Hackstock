@@ -3,6 +3,7 @@ from app.parser import (
     ParsedParagraph,
     build_hierarchy,
     build_semantic_blocks,
+    clean_ocr_noise,
     matches_law_firm_line,
     normalize_ocr_lines,
     should_ocr_normalize,
@@ -97,3 +98,35 @@ def test_merge_short_lines_logic_and_heading_anchor_barrier():
     body_blocks = [b for b in blocks if b.block_type.startswith("BODY")]
     assert "weitere Gründe" in body_blocks[0].text_original
     assert body_blocks[1].text_original.startswith("1. Unterpunkt")
+
+
+def test_clean_ocr_noise_removes_page_numbers_and_repeats_but_keeps_accounts():
+    paras = [
+        "Seite 1 von 3",
+        "123",
+        "Kostenstelle 4400",
+        "1000 - Mieterlöse",
+    ] + ["ACME GmbH 2024"] * 8 + ["Sachverhalt beginnt"]
+    styles = ["Normal"] * len(paras)
+
+    result = clean_ocr_noise(paras, styles, repeat_threshold=8)
+
+    assert any(r.reason == "PAGE_NUMBER_RULE" for r in result.removed_lines)
+    assert any(r.reason == "HEADER_FOOTER_CANDIDATE" for r in result.removed_lines)
+    assert "Kostenstelle 4400" in result.kept_paragraphs
+    assert "1000 - Mieterlöse" in result.kept_paragraphs
+    assert result.kept_account_headings_count >= 2
+
+
+def test_clean_ocr_noise_ambiguous_defaults_keep():
+    paras = ["123", "Konto 1200", "123"]
+    styles = ["Normal", "Normal", "Normal"]
+
+    result = clean_ocr_noise(
+        paras,
+        styles,
+        repeat_threshold=2,
+        classify_ambiguous=lambda _line, _prev, _next: ("KEEP", "unsicher"),
+    )
+
+    assert "Konto 1200" in result.kept_paragraphs

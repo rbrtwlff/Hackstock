@@ -5,6 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from docx import Document
 
@@ -29,6 +30,16 @@ LEGAL_CITATION_RE = re.compile(
     r"(?:\b(?:BGH|OLG|LG|AG|BVerfG|EuGH)\b|\b[IVX]{1,5}\s*[A-Z]{1,3}\s*\d+/\d{2,4}\b|\bRdn\.?\s*\d+\b|\bRn\.?\s*\d+\b|\bBT-?Drucks\.?\s*\d+/\d+\b|§\s*\d+[a-zA-Z]*\s*(?:Abs\.?\s*\d+)?\s*(?:S\.?\s*\d+)?\s*[A-ZÄÖÜa-zäöü]{2,})"
 )
 CONNECTOR_RE = re.compile(r"^(?:und|oder|dass|weil|sodass|insbesondere|ferner)\b", re.IGNORECASE)
+PAGE_NUMBER_RES = [
+    re.compile(r"^\s*\d{1,4}\s*$"),
+    re.compile(r"^\s*-\s*\d{1,4}\s*-\s*$"),
+    re.compile(r"^\s*(seite|page)\s+\d{1,4}(\s*(von|of)\s*\d{1,4})?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*\d{1,4}\s*/\s*\d{1,4}\s*$"),
+]
+KEEP_KEYWORDS_RE = re.compile(r"\b(konto|sachkonto|buchungskonto|kontonr|kontonummer|kostenstelle|kostenart)\b", re.IGNORECASE)
+KEEP_NUMBER_AND_WORD_RE = re.compile(r"\b\d{3,10}\b")
+LETTER_WORD_RE = re.compile(r"\b[\wäöüÄÖÜß]*[A-Za-zÄÖÜäöüß][\wäöüÄÖÜß]*\b")
+KEEP_ACCOUNT_HEADING_RE = re.compile(r"^\s*\d{3,10}\s*[-–—]\s*\D+")
 
 
 @dataclass
@@ -51,6 +62,22 @@ class SemanticBlock:
     source_paragraph_indexes: list[int]
     intro_text: str | None = None
     quote_text: str | None = None
+
+
+@dataclass
+class RemovedLine:
+    para_index: int
+    text: str
+    reason: str
+
+
+@dataclass
+class OCRCleanResult:
+    kept_paragraphs: list[str]
+    kept_styles: list[str]
+    kept_indexes: list[int]
+    removed_lines: list[RemovedLine]
+    kept_account_headings_count: int
 
 
 def file_hash(path: Path) -> str:
@@ -114,6 +141,84 @@ def normalize_ocr_lines(paragraphs: list[str]) -> list[str]:
     if buffer:
         result.append(buffer.strip())
     return result
+
+
+def _normalize_for_frequency(text: str) -> str:
+    base = re.sub(r"\d+", "#", text.lower().strip())
+    return re.sub(r"\s+", " ", base)
+
+
+def _keep_match(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if KEEP_KEYWORDS_RE.search(stripped):
+        return True
+    if KEEP_NUMBER_AND_WORD_RE.search(stripped) and LETTER_WORD_RE.search(stripped):
+        return True
+    if KEEP_ACCOUNT_HEADING_RE.match(stripped):
+        return True
+    return False
+
+
+def _remove_page_match(text: str) -> bool:
+    return any(rx.match(text) for rx in PAGE_NUMBER_RES)
+
+
+def clean_ocr_noise(
+    paragraphs: list[str],
+    styles: list[str],
+    repeat_threshold: int = 8,
+    classify_ambiguous: Callable[[str, str | None, str | None], tuple[str, str]] | None = None,
+) -> OCRCleanResult:
+    normalized = [_normalize_for_frequency(p) for p in paragraphs]
+    freqs: dict[str, int] = {}
+    for n in normalized:
+        freqs[n] = freqs.get(n, 0) + 1
+
+    kept_paragraphs: list[str] = []
+    kept_styles: list[str] = []
+    kept_indexes: list[int] = []
+    removed_lines: list[RemovedLine] = []
+    kept_account_headings_count = 0
+
+    for idx, text in enumerate(paragraphs):
+        raw = text.strip()
+        if not raw:
+            continue
+        keep_hit = _keep_match(raw)
+        remove_page = _remove_page_match(raw)
+        remove_repeat = freqs.get(normalized[idx], 0) >= repeat_threshold and len(raw) <= 120
+
+        remove_reason: str | None = None
+        if keep_hit and (remove_page or remove_repeat):
+            if len(raw) <= 60 and classify_ambiguous:
+                prev_line = paragraphs[idx - 1].strip() if idx > 0 else None
+                next_line = paragraphs[idx + 1].strip() if idx + 1 < len(paragraphs) else None
+                action, reason = classify_ambiguous(raw, prev_line, next_line)
+                if action == "REMOVE":
+                    remove_reason = f"LLM_AMBIGUOUS:{reason}"
+        elif not keep_hit and remove_page:
+            remove_reason = "PAGE_NUMBER_RULE"
+        elif not keep_hit and remove_repeat:
+            remove_reason = "HEADER_FOOTER_CANDIDATE"
+
+        if remove_reason:
+            removed_lines.append(RemovedLine(para_index=idx, text=raw, reason=remove_reason))
+            continue
+        if keep_hit:
+            kept_account_headings_count += 1
+        kept_paragraphs.append(raw)
+        kept_styles.append(styles[idx])
+        kept_indexes.append(idx)
+
+    return OCRCleanResult(
+        kept_paragraphs=kept_paragraphs,
+        kept_styles=kept_styles,
+        kept_indexes=kept_indexes,
+        removed_lines=removed_lines,
+        kept_account_headings_count=kept_account_headings_count,
+    )
 
 
 def parse_docx(path: Path) -> tuple[list[str], list[tuple[str, str]]]:

@@ -63,6 +63,22 @@ class LLMClient:
             fixed = await self.call_json("Return valid JSON only.", repair_user)
             return ParagraphAnalysisModel.model_validate(fixed)
 
+
+
+    async def classify_noise_line(self, line: str, prev_line: str | None = None, next_line: str | None = None) -> dict[str, str]:
+        context = f"Vorher: {prev_line or ''}\nZeile: {line}\nNachher: {next_line or ''}"
+        user = (
+            "Klassifiziere diese OCR-Zeile als KEEP oder REMOVE. "
+            "Bei Unsicherheit KEEP. Antworte exakt als JSON mit Feldern action und reason.\n"
+            f"{context}"
+        )
+        data = await self.call_json("Du entfernst OCR-Noise, ohne Kontenüberschriften zu löschen.", user)
+        action = str(data.get("action", "KEEP")).upper()
+        if action not in {"KEEP", "REMOVE"}:
+            action = "KEEP"
+        reason = str(data.get("reason", "fallback_keep"))
+        return {"action": action, "reason": reason}
+
     async def classify_link(self, left: str, right: str) -> LinkProposalModel:
         user = f"Kläger-Argument:\n{self.cap_text(left,600)}\n\nBeklagten-Argument:\n{self.cap_text(right,600)}"
         data = await self.call_json("Bestimme Link-Typ und gib JSON.", user)

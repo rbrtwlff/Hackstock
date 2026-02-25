@@ -52,9 +52,9 @@ def retry_failed():
 
 
 @app.get("/api/paragraphs")
-def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: str | None = None, role: str | None = None, q: str | None = None, include_rubrum: bool = False):
+def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: str | None = None, role: str | None = None, q: str | None = None, include_rubrum: bool = False, include_noise: bool = False):
     with db_conn(config.db_path) as conn:
-        sql = """SELECT d.doc_id,d.side,d.raw_paragraph_count,d.semantic_block_count,sb.id,sb.block_type,sb.text_original,sb.intro_text,sb.quote_text,sb.hierarchy_path,sba.role,sba.summary_3_sentences,sba.keywords_json,sba.issues_json
+        sql = """SELECT d.doc_id,d.side,d.raw_paragraph_count,d.semantic_block_count,d.removed_lines_count,d.kept_account_headings_count,sb.id,sb.block_type,sb.text_original,sb.intro_text,sb.quote_text,sb.hierarchy_path,sba.role,sba.summary_3_sentences,sba.keywords_json,sba.issues_json
         FROM semantic_blocks sb JOIN documents d ON sb.document_id=d.id
         LEFT JOIN semantic_block_analysis sba ON sba.block_id=sb.id WHERE 1=1"""
         params = []
@@ -94,9 +94,29 @@ def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: st
                     "issues": json.loads(issues_json),
                     "raw_paragraph_count": r["raw_paragraph_count"],
                     "semantic_block_count": r["semantic_block_count"],
+                    "removed_lines_count": r["removed_lines_count"],
+                    "kept_account_headings_count": r["kept_account_headings_count"],
                 }
             )
         return out
+
+
+@app.get("/api/removed-lines")
+def get_removed_lines(doc_id: str | None = None, reason: str | None = None, q: str | None = None):
+    with db_conn(config.db_path) as conn:
+        sql = "SELECT rl.*, d.side FROM removed_lines rl JOIN documents d ON rl.doc_id=d.doc_id WHERE 1=1"
+        params = []
+        if doc_id:
+            sql += " AND rl.doc_id=?"
+            params.append(doc_id)
+        if reason:
+            sql += " AND rl.reason=?"
+            params.append(reason)
+        if q:
+            sql += " AND rl.text LIKE ?"
+            params.append(f"%{q}%")
+        rows = conn.execute(sql + " ORDER BY rl.created_at DESC, rl.id DESC", tuple(params)).fetchall()
+        return [dict(r) for r in rows]
 
 
 @app.get("/api/outline")
