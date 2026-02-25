@@ -5,6 +5,7 @@ const state = {
   selectedIssues: new Set(),
   party: 'all',
   role: 'all',
+  brief: 'all',
   page: 1,
   perPage: 3,
   selectedParagraph: null,
@@ -33,8 +34,10 @@ function filteredParagraphs() {
     const okSearch = text.includes(state.search);
     const okIssue = !state.selectedIssues.size || state.selectedIssues.has(p.issue);
     const okParty = state.party === 'all' || p.party === state.party;
+    const briefLabel = p.path?.[0] ?? 'Unbekannt';
     const okRole = state.role === 'all' || p.role === state.role;
-    return okSearch && okIssue && okParty && okRole;
+    const okBrief = state.brief === 'all' || briefLabel === state.brief;
+    return okSearch && okIssue && okParty && okRole && okBrief;
   });
 }
 
@@ -42,6 +45,7 @@ function renderFilters() {
   const issues = [...new Set(state.data.paragraphs.map((p) => p.issue))];
   const parties = ['all', ...new Set(state.data.paragraphs.map((p) => p.party))];
   const roles = ['all', ...new Set(state.data.paragraphs.map((p) => p.role))];
+  const briefs = ['all', ...new Set(state.data.paragraphs.map((p) => p.path?.[0] ?? 'Unbekannt'))];
 
   const issueWrap = el('issueChips');
   issueWrap.innerHTML = '';
@@ -66,6 +70,7 @@ function renderFilters() {
     s.value = selected;
   };
 
+  setSelectOptions('briefSelect', briefs, state.brief);
   setSelectOptions('partySelect', parties, state.party);
   setSelectOptions('roleSelect', roles, state.role);
 }
@@ -130,7 +135,7 @@ function renderParagraphList() {
     .join('');
   el('pageInfo').textContent = `Seite ${state.page} / ${totalPages} (${list.length} Absätze)`;
 
-  document.querySelectorAll('.paragraph-item').forEach((item) => {
+  document.querySelectorAll('#paragraphList .paragraph-item').forEach((item) => {
     item.onclick = () => {
       const para = state.data.paragraphs.find((p) => p.id === item.dataset.id);
       state.selectedParagraph = para;
@@ -229,10 +234,10 @@ function renderMatrix() {
 
 function renderTables() {
   el('tableList').innerHTML = state.data.tables
-    .map((t) => `<li class="paragraph-item" data-id="${t.id}"><strong>${t.id}</strong> – ${t.title}<br/><small>${t.description}</small></li>`)
+    .map((t) => `<li class="table-item" data-id="${t.id}"><strong>${t.id}</strong> – ${t.title}<br/><small>${t.description}</small></li>`)
     .join('');
 
-  document.querySelectorAll('#tableList .paragraph-item').forEach((row) => {
+  document.querySelectorAll('#tableList .table-item').forEach((row) => {
     row.onclick = () => {
       const table = state.data.tables.find((t) => t.id === row.dataset.id);
       el('tableTitle').textContent = `${table.id} – ${table.title}`;
@@ -258,8 +263,10 @@ function bindEvents() {
     state.page = 1;
     renderAll();
   });
-  el('fontSelect').onchange = (e) => {
-    document.body.style.fontFamily = e.target.value;
+  el('briefSelect').onchange = (e) => {
+    state.brief = e.target.value;
+    state.page = 1;
+    renderAll();
   };
   el('partySelect').onchange = (e) => {
     state.party = e.target.value;

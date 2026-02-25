@@ -18,11 +18,7 @@
 
     <section class="filters">
       <input id="search" type="search" placeholder="Volltextsuche (Original + Summary)" />
-      <select id="fontSelect">
-        <option value="system-ui">System</option>
-        <option value="serif">Serif</option>
-        <option value="monospace">Monospace</option>
-      </select>
+      <select id="briefSelect"></select>
       <select id="partySelect"></select>
       <select id="roleSelect"></select>
       <div id="issueChips" class="chips"></div>
@@ -86,7 +82,7 @@
 
       <section id="tables" class="view">
         <aside class="panel">
-          <ul id="tableList" class="list"></ul>
+          <ul id="tableList" class="list table-list"></ul>
         </aside>
         <section class="panel">
           <h3 id="tableTitle">Tabellenblock wählen</h3>

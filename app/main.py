@@ -78,7 +78,9 @@ def delete_link(link_id: str) -> dict[str, str]:
 @app.post("/api/links")
 def create_link(payload: LinkCreate) -> dict[str, Any]:
     data = load_data()
-    link_id = f"L{len(data['links']) + 1:03d}"
+    numeric_ids = [int(link["id"][1:]) for link in data["links"] if link.get("id", "").startswith("L") and link["id"][1:].isdigit()]
+    next_id = max(numeric_ids, default=0) + 1
+    link_id = f"L{next_id:03d}"
     new_link = payload.model_dump()
     new_link["id"] = link_id
     data["links"].append(new_link)
