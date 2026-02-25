@@ -1,0 +1,110 @@
+{
+  "paragraphs": [
+    {
+      "id": "P001",
+      "case_id": "K-2024-001",
+      "party": "Kläger",
+      "role": "Anwalt",
+      "issue": "Vertragsauslegung",
+      "title": "Einleitung",
+      "original": "Der Kläger macht Ansprüche aus einem Rahmenvertrag vom 12.03.2021 geltend.",
+      "summary": "Kläger fordert Zahlungen aus Vertrag.",
+      "path": ["Klage", "Einleitung"]
+    },
+    {
+      "id": "P002",
+      "case_id": "K-2024-001",
+      "party": "Kläger",
+      "role": "Sachbearbeiter",
+      "issue": "Zahlungsverzug",
+      "title": "Forderungsaufstellung",
+      "original": "Offene Positionen in Höhe von 82.000 EUR wurden trotz Mahnung nicht ausgeglichen.",
+      "summary": "Mehrere Mahnungen ohne Zahlungseingang.",
+      "path": ["Klage", "Forderungen"]
+    },
+    {
+      "id": "P003",
+      "case_id": "K-2024-001",
+      "party": "Beklagter",
+      "role": "Anwalt",
+      "issue": "Vertragsauslegung",
+      "title": "Erwiderung",
+      "original": "Die Beklagte bestreitet den Umfang der abgerechneten Zusatzleistungen.",
+      "summary": "Beklagte hält Abrechnung für überhöht.",
+      "path": ["Erwiderung", "Leistungsumfang"]
+    },
+    {
+      "id": "P004",
+      "case_id": "K-2024-001",
+      "party": "Beklagter",
+      "role": "Geschäftsführer",
+      "issue": "Kommunikation",
+      "title": "E-Mail-Verlauf",
+      "original": "Im E-Mail-Verkehr vom April wurde ein Zahlungsaufschub bis Juni vereinbart.",
+      "summary": "Aufschub wurde behauptet.",
+      "path": ["Erwiderung", "Kommunikation"]
+    },
+    {
+      "id": "P005",
+      "case_id": "K-2024-001",
+      "party": "Kläger",
+      "role": "Anwalt",
+      "issue": "Beweiswürdigung",
+      "title": "Replik",
+      "original": "Die vorgelegte E-Mail enthält keine Zustimmung zu einem vollständigen Zahlungsaufschub.",
+      "summary": "Kläger widerspricht behauptetem Aufschub.",
+      "path": ["Replik", "Aufschub"]
+    },
+    {
+      "id": "P006",
+      "case_id": "K-2024-001",
+      "party": "Gericht",
+      "role": "Richter",
+      "issue": "Prozessleitung",
+      "title": "Hinweisbeschluss",
+      "original": "Das Gericht regt eine gütliche Einigung über den streitigen Zusatzaufwand an.",
+      "summary": "Vergleich wird angeregt.",
+      "path": ["Gericht", "Hinweise"]
+    }
+  ],
+  "links": [
+    {
+      "id": "L001",
+      "source_id": "P002",
+      "target_id": "P003",
+      "link_type": "widerspricht",
+      "confidence": 0.92,
+      "status": "confirmed"
+    },
+    {
+      "id": "L002",
+      "source_id": "P004",
+      "target_id": "P005",
+      "link_type": "wird widerlegt",
+      "confidence": 0.81,
+      "status": "proposed"
+    },
+    {
+      "id": "L003",
+      "source_id": "P001",
+      "target_id": "P006",
+      "link_type": "führt zu",
+      "confidence": 0.63,
+      "status": "rejected"
+    }
+  ],
+  "tables": [
+    {
+      "id": "T001",
+      "title": "Offene Positionen",
+      "description": "Forderungen des Klägers nach Rechnung",
+      "html": "<table><thead><tr><th>Rechnung</th><th>Betrag</th><th>Fälligkeit</th></tr></thead><tbody><tr><td>R-1001</td><td>32.000 EUR</td><td>30.01.2024</td></tr><tr><td>R-1002</td><td>50.000 EUR</td><td>15.02.2024</td></tr></tbody></table>"
+    },
+    {
+      "id": "T002",
+      "title": "Kommunikations-Log",
+      "description": "Wesentliche E-Mails mit Datum",
+      "html": "<table><thead><tr><th>Datum</th><th>Absender</th><th>Inhalt</th></tr></thead><tbody><tr><td>12.04.2024</td><td>Beklagte</td><td>Bitte um Aufschub bis Juni</td></tr><tr><td>14.04.2024</td><td>Kläger</td><td>Nur Teilaufschub für Einzelforderung</td></tr></tbody></table>"
+    }
+  ]
+}
