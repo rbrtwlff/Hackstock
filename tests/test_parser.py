@@ -1,5 +1,23 @@
 from app.models import ParagraphAnalysisModel
-from app.parser import build_hierarchy, normalize_ocr_lines, should_ocr_normalize
+from app.parser import (
+    ParsedParagraph,
+    build_hierarchy,
+    build_semantic_blocks,
+    matches_law_firm_line,
+    normalize_ocr_lines,
+    should_ocr_normalize,
+)
+
+
+def _p(idx: int, text: str, heading: bool = False, style: str = "Normal") -> ParsedParagraph:
+    return ParsedParagraph(
+        para_index=idx,
+        text=text,
+        style=style,
+        is_heading=heading,
+        hierarchy_path="ROOT",
+        continuation_group="g1",
+    )
 
 
 def test_hierarchy_heading_detection():
@@ -33,3 +51,49 @@ def test_schema_validation():
     }
     model = ParagraphAnalysisModel.model_validate(valid)
     assert model.role.value == "LEGAL_POSITION"
+
+
+def test_rubrum_detection_stops_at_first_heading_anchor():
+    blocks = build_semantic_blocks([
+        _p(0, "Rechtsanwaltskanzlei Muster"),
+        _p(1, "Musterstraße 12, 12345 Berlin"),
+        _p(2, "I. Sachverhalt", heading=True, style="Heading 1"),
+        _p(3, "Der Kläger trägt vor."),
+    ])
+    assert blocks[0].block_type == "RUBRUM_META"
+    assert "Kanzlei" in blocks[0].text_original
+    assert blocks[1].block_type == "BODY"
+    assert "I. Sachverhalt" in blocks[1].text_original
+
+
+def test_law_firm_line_pattern_detection():
+    assert matches_law_firm_line("Rechtsanwälte Beispiel")
+    assert matches_law_firm_line("Musterstraße 20")
+    assert matches_law_firm_line("12345 Berlin")
+    assert matches_law_firm_line("Tel. 030-1234")
+
+
+def test_quote_start_continue_end_and_intro_merge():
+    blocks = build_semantic_blocks([
+        _p(0, "I. Sachverhalt", heading=True, style="Heading 1"),
+        _p(1, "Hierzu führt der BGH aus:"),
+        _p(2, "„Dies ist ein langer zitierter Satz mit § 280 Abs. 1 BGB; Rn. 12."),
+        _p(3, "fortgesetzt mit weiteren Gründen und Fundstellen (BGH I ZR 12/22).“"),
+        _p(4, "Danach folgt normaler Fließtext."),
+    ])
+    quote_block = next(b for b in blocks if b.block_type == "BODY_WITH_QUOTE")
+    assert quote_block.intro_text == "Hierzu führt der BGH aus:"
+    assert "§ 280 Abs. 1 BGB" in quote_block.quote_text
+
+
+def test_merge_short_lines_logic_and_heading_anchor_barrier():
+    blocks = build_semantic_blocks([
+        _p(0, "I. Antrag", heading=True, style="Heading 1"),
+        _p(1, "Der Anspruch besteht weil"),
+        _p(2, "und weitere Gründe folgen"),
+        _p(3, "1. Unterpunkt", heading=True, style="Heading 2"),
+        _p(4, "Neuer Abschnitt."),
+    ])
+    body_blocks = [b for b in blocks if b.block_type.startswith("BODY")]
+    assert "weitere Gründe" in body_blocks[0].text_original
+    assert body_blocks[1].text_original.startswith("1. Unterpunkt")

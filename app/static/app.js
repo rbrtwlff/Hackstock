@@ -13,17 +13,39 @@ async function retryFailed() {
   await Promise.all([loadSearch(), loadMatrix()]);
 }
 
+function escapeHtml(value) {
+  return (value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
 async function loadSearch() {
   const q = document.getElementById('q').value;
-  const data = await (await fetch('/api/paragraphs?q=' + encodeURIComponent(q))).json();
+  const includeRubrum = document.getElementById('showRubrum').checked;
+  const data = await (await fetch('/api/paragraphs?q=' + encodeURIComponent(q) + '&include_rubrum=' + includeRubrum)).json();
   const el = document.getElementById('searchResults');
-  el.innerHTML = data.map(x => `<div class="card"><b>${x.doc_id} (${x.side})</b><br>${x.hierarchy_path}<br>${x.text}<hr><i>${x.summary||''}</i><br>Role: ${x.role||''}<br>Issues: ${(x.issues||[]).join(', ')}</div>`).join('');
+  const statsEl = document.getElementById('mergeStats');
+
+  const stats = {};
+  data.forEach(x => {
+    if (!stats[x.doc_id]) {
+      stats[x.doc_id] = {raw: x.raw_paragraph_count, semantic: x.semantic_block_count};
+    }
+  });
+  statsEl.innerHTML = Object.entries(stats)
+    .map(([doc, s]) => `<div class='card'><b>${doc}</b> Paragraphs merged: ${s.raw} raw -> ${s.semantic} blocks</div>`)
+    .join('');
+
+  el.innerHTML = data.map(x => {
+    const intro = x.intro_text ? `<div><b>Einleitung</b><br>${escapeHtml(x.intro_text)}</div>` : '';
+    const quote = x.quote_text ? `<blockquote>${escapeHtml(x.quote_text)}</blockquote>` : '';
+    const body = (!x.quote_text || x.block_type === 'QUOTE_BLOCK') ? `<div>${escapeHtml(x.text)}</div>` : '';
+    return `<div class="card"><b>${x.doc_id} (${x.side})</b> <span>${x.block_type}</span><br>${escapeHtml(x.hierarchy_path || '')}<hr>${intro}${quote}${body}<hr><i>${escapeHtml(x.summary||'')}</i><br>Role: ${escapeHtml(x.role||'')}<br>Issues: ${(x.issues||[]).join(', ')}</div>`;
+  }).join('');
 }
 
 async function loadOutline() {
   const data = await (await fetch('/api/outline')).json();
   const el = document.getElementById('outlineData');
-  el.innerHTML = `<div class="grid"><div><h3>Argumentbaum</h3>${data.arguments.map(a=>`<div class='card'>#${a.id} ${a.title}</div>`).join('')}</div><div><h3>Absatz-Mapping</h3>${data.mapping.map(m=>`<div class='card'>Absatz ${m.paragraph_id} -> Argument ${m.argument_id}</div>`).join('')}</div><div><h3>Details</h3>Klicken Sie in Search auf Absätze für Details (MVP).</div></div>`;
+  el.innerHTML = `<div class="grid"><div><h3>Argumentbaum</h3>${data.arguments.map(a=>`<div class='card'>#${a.id} ${a.title}</div>`).join('')}</div><div><h3>Block-Mapping</h3>${data.mapping.map(m=>`<div class='card'>Block ${m.block_id} -> Argument ${m.argument_id}</div>`).join('')}</div><div><h3>Details</h3>Klicken Sie in Search auf Blöcke für Details (MVP).</div></div>`;
 }
 
 async function setLinkStatus(id, status) {

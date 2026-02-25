@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS documents (
     filename TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     ocr_normalized INTEGER DEFAULT 0,
+    raw_paragraph_count INTEGER DEFAULT 0,
+    semantic_block_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS table_blocks (
@@ -38,8 +40,30 @@ CREATE TABLE IF NOT EXISTS paragraphs (
     content_hash TEXT NOT NULL UNIQUE,
     FOREIGN KEY(document_id) REFERENCES documents(id)
 );
-CREATE TABLE IF NOT EXISTS paragraph_analysis (
-    paragraph_id INTEGER PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS semantic_blocks (
+    id INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL,
+    block_index INTEGER NOT NULL,
+    block_type TEXT NOT NULL,
+    hierarchy_path TEXT,
+    text_original TEXT NOT NULL,
+    text_normalized TEXT NOT NULL,
+    intro_text TEXT,
+    quote_text TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(document_id, block_index),
+    FOREIGN KEY(document_id) REFERENCES documents(id)
+);
+CREATE TABLE IF NOT EXISTS semantic_block_sources (
+    block_id INTEGER NOT NULL,
+    paragraph_id INTEGER NOT NULL,
+    ord INTEGER NOT NULL,
+    PRIMARY KEY (block_id, paragraph_id),
+    FOREIGN KEY(block_id) REFERENCES semantic_blocks(id),
+    FOREIGN KEY(paragraph_id) REFERENCES paragraphs(id)
+);
+CREATE TABLE IF NOT EXISTS semantic_block_analysis (
+    block_id INTEGER PRIMARY KEY,
     keywords_json TEXT,
     issues_json TEXT,
     role TEXT,
@@ -50,7 +74,7 @@ CREATE TABLE IF NOT EXISTS paragraph_analysis (
     citations_cases_json TEXT,
     citations_contract_json TEXT,
     citations_exhibits_json TEXT,
-    FOREIGN KEY(paragraph_id) REFERENCES paragraphs(id)
+    FOREIGN KEY(block_id) REFERENCES semantic_blocks(id)
 );
 CREATE TABLE IF NOT EXISTS issue_vocab (
     id INTEGER PRIMARY KEY,
@@ -67,11 +91,11 @@ CREATE TABLE IF NOT EXISTS arguments (
     hierarchy_path TEXT,
     FOREIGN KEY(document_id) REFERENCES documents(id)
 );
-CREATE TABLE IF NOT EXISTS paragraph_arguments (
-    paragraph_id INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS semantic_block_arguments (
+    block_id INTEGER NOT NULL,
     argument_id INTEGER NOT NULL,
-    PRIMARY KEY (paragraph_id, argument_id),
-    FOREIGN KEY(paragraph_id) REFERENCES paragraphs(id),
+    PRIMARY KEY (block_id, argument_id),
+    FOREIGN KEY(block_id) REFERENCES semantic_blocks(id),
     FOREIGN KEY(argument_id) REFERENCES arguments(id)
 );
 CREATE TABLE IF NOT EXISTS links (
@@ -85,8 +109,8 @@ CREATE TABLE IF NOT EXISTS links (
     rationale_short TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'proposed'
 );
-CREATE TABLE IF NOT EXISTS paragraph_jobs (
-    paragraph_id INTEGER PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS semantic_block_jobs (
+    block_id INTEGER PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'PENDING',
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
@@ -116,7 +140,16 @@ def db_conn(path: str):
         conn.close()
 
 
+def _migrate(conn):
+    columns = {r['name'] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if 'raw_paragraph_count' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN raw_paragraph_count INTEGER DEFAULT 0")
+    if 'semantic_block_count' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN semantic_block_count INTEGER DEFAULT 0")
+
+
 def init_db(path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with db_conn(path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)

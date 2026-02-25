@@ -20,7 +20,8 @@
 
   <section id="search" class="tab">
     <h2>Suche</h2>
-    <input id="q" placeholder="Volltext / Summary" /><button onclick="loadSearch()">Suchen</button>
+    <input id="q" placeholder="Volltext / Summary" /><label style="margin-left:12px"><input id="showRubrum" type="checkbox" onchange="loadSearch()" /> Rubrum anzeigen</label><button onclick="loadSearch()">Suchen</button>
+    <div id="mergeStats"></div>
     <div id="searchResults"></div>
   </section>
 
