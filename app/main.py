@@ -4,7 +4,7 @@ import json
 import webbrowser
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -51,11 +51,11 @@ def retry_failed():
 
 
 @app.get("/api/paragraphs")
-def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: str | None = None, role: str | None = None, q: str | None = None):
+def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: str | None = None, role: str | None = None, q: str | None = None, include_rubrum: bool = False):
     with db_conn(config.db_path) as conn:
-        sql = """SELECT d.doc_id,d.side,p.id,p.text,p.hierarchy_path,pa.role,pa.summary_3_sentences,pa.keywords_json,pa.issues_json
-        FROM paragraphs p JOIN documents d ON p.document_id=d.id
-        LEFT JOIN paragraph_analysis pa ON pa.paragraph_id=p.id WHERE 1=1"""
+        sql = """SELECT d.doc_id,d.side,d.raw_paragraph_count,d.semantic_block_count,sb.id,sb.block_type,sb.text_original,sb.intro_text,sb.quote_text,sb.hierarchy_path,sba.role,sba.summary_3_sentences,sba.keywords_json,sba.issues_json
+        FROM semantic_blocks sb JOIN documents d ON sb.document_id=d.id
+        LEFT JOIN semantic_block_analysis sba ON sba.block_id=sb.id WHERE 1=1"""
         params = []
         if doc_id:
             sql += " AND d.doc_id=?"
@@ -64,27 +64,35 @@ def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: st
             sql += " AND d.side=?"
             params.append(side)
         if role:
-            sql += " AND pa.role=?"
+            sql += " AND sba.role=?"
             params.append(role)
-        rows = conn.execute(sql + " ORDER BY d.date,p.para_index", tuple(params)).fetchall()
+        if not include_rubrum:
+            sql += " AND sb.block_type != 'RUBRUM_META'"
+        rows = conn.execute(sql + " ORDER BY d.date,sb.block_index", tuple(params)).fetchall()
         out = []
         for r in rows:
             issues_json = r["issues_json"] or "[]"
             if issue and issue not in json.loads(issues_json):
                 continue
-            if q and q.lower() not in (r["text"] or "").lower() and q.lower() not in (r["summary_3_sentences"] or "").lower():
+            text_value = r["text_original"] or ""
+            if q and q.lower() not in text_value.lower() and q.lower() not in (r["summary_3_sentences"] or "").lower():
                 continue
             out.append(
                 {
                     "doc_id": r["doc_id"],
                     "side": r["side"],
                     "id": r["id"],
-                    "text": r["text"],
+                    "block_type": r["block_type"],
+                    "text": text_value,
+                    "intro_text": r["intro_text"],
+                    "quote_text": r["quote_text"],
                     "hierarchy_path": r["hierarchy_path"],
                     "role": r["role"],
                     "summary": r["summary_3_sentences"],
                     "keywords": json.loads(r["keywords_json"] or "[]"),
                     "issues": json.loads(issues_json),
+                    "raw_paragraph_count": r["raw_paragraph_count"],
+                    "semantic_block_count": r["semantic_block_count"],
                 }
             )
         return out
@@ -94,7 +102,7 @@ def get_paragraphs(doc_id: str | None = None, side: str | None = None, issue: st
 def outline():
     with db_conn(config.db_path) as conn:
         args = [dict(r) for r in conn.execute("SELECT * FROM arguments ORDER BY document_id,id").fetchall()]
-        maps = [dict(r) for r in conn.execute("SELECT * FROM paragraph_arguments").fetchall()]
+        maps = [dict(r) for r in conn.execute("SELECT * FROM semantic_block_arguments").fetchall()]
         return {"arguments": args, "mapping": maps}
 
 
