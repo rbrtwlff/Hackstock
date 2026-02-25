@@ -1,0 +1,11 @@
+base_url: https://api.moonshot.ai/v1
+api_key: ""
+model: moonshotai/kimi-k2.5
+timeout_seconds: 45
+retries: 3
+max_parallelism: 1
+token_budget: 2200
+logging_mode: errors+metadata
+host: 127.0.0.1
+port: 8000
+db_path: case.sqlite
