@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Nebenkosten Viewer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <h1>KI-Viewer Gewerberaummiete/Nebenkosten</h1>
+  <div class="actions">
+    <button onclick="runAll()">RUN ALL</button>
+    <button onclick="retryFailed()">Retry Failed</button>
+  </div>
+  <div class="tabs">
+    <button onclick="showTab('search')">Search</button>
+    <button onclick="showTab('outline')">Outline</button>
+    <button onclick="showTab('matrix')">Matrix</button>
+    <button onclick="showTab('tables')">Tables</button>
+  </div>
+
+  <section id="search" class="tab">
+    <h2>Suche</h2>
+    <input id="q" placeholder="Volltext / Summary" /><button onclick="loadSearch()">Suchen</button>
+    <div id="searchResults"></div>
+  </section>
+
+  <section id="outline" class="tab hidden">
+    <h2>Outline</h2>
+    <div id="outlineData"></div>
+  </section>
+
+  <section id="matrix" class="tab hidden">
+    <h2>Matrix</h2>
+    <div id="matrixData"></div>
+  </section>
+
+  <section id="tables" class="tab hidden">
+    <h2>Tabellen</h2>
+    <div id="tablesData"></div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
