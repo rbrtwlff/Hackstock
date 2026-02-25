@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hackstock Viewer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Hackstock Viewer</h1>
+      <div class="tabs">
+        <button class="tab active" data-view="outline">Outline View</button>
+        <button class="tab" data-view="matrix">Matrix View</button>
+        <button class="tab" data-view="tables">Tables View</button>
+      </div>
+    </header>
+
+    <section class="filters">
+      <input id="search" type="search" placeholder="Volltextsuche (Original + Summary)" />
+      <select id="briefSelect"></select>
+      <select id="partySelect"></select>
+      <select id="roleSelect"></select>
+      <div id="issueChips" class="chips"></div>
+    </section>
+
+    <main>
+      <section id="outline" class="view active">
+        <aside id="outlineTree" class="panel"></aside>
+        <section class="panel">
+          <div id="paragraphList" class="list"></div>
+          <div class="pagination">
+            <button id="prevPage">Zurück</button>
+            <span id="pageInfo"></span>
+            <button id="nextPage">Weiter</button>
+          </div>
+        </section>
+        <aside id="detailPane" class="panel detail">Absatz auswählen…</aside>
+      </section>
+
+      <section id="matrix" class="view">
+        <div class="panel matrix-controls">
+          <select id="linkTypeFilter"></select>
+          <select id="confidenceFilter">
+            <option value="all">Alle Confidence</option>
+            <option value="0.8">≥ 0.8</option>
+            <option value="0.6">≥ 0.6</option>
+          </select>
+          <select id="statusFilter"></select>
+          <label><input type="checkbox" id="edgeMode" /> Kantenliste statt Zeilen</label>
+        </div>
+        <div class="panel matrix-columns">
+          <div>
+            <h3>Kläger</h3>
+            <ul id="plaintiffList"></ul>
+          </div>
+          <div>
+            <h3>Beklagter</h3>
+            <ul id="defendantList"></ul>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Links</h3>
+          <div id="linkList"></div>
+        </div>
+        <div class="panel">
+          <h3>Link-Editor</h3>
+          <form id="addLinkForm" class="add-link-form">
+            <select id="sourceSelect" required></select>
+            <select id="targetSelect" required></select>
+            <input id="newLinkType" placeholder="Link-Typ" required />
+            <input id="newConfidence" type="number" step="0.01" min="0" max="1" placeholder="Confidence (optional)" />
+            <select id="newStatus">
+              <option value="proposed">proposed</option>
+              <option value="confirmed">confirmed</option>
+              <option value="rejected">rejected</option>
+            </select>
+            <button type="submit">Link hinzufügen</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="tables" class="view">
+        <aside class="panel">
+          <ul id="tableList" class="list table-list"></ul>
+        </aside>
+        <section class="panel">
+          <h3 id="tableTitle">Tabellenblock wählen</h3>
+          <div id="tableView"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
