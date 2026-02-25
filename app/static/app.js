@@ -5,17 +5,29 @@ function showTab(id) {
 
 async function runAll() {
   await fetch('/api/run-all', {method: 'POST'});
-  await Promise.all([loadSearch(), loadOutline(), loadMatrix(), loadTables()]);
+  await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
 }
 
 async function retryFailed() {
   await fetch('/api/retry-failed', {method: 'POST'});
-  await Promise.all([loadSearch(), loadMatrix()]);
+  await Promise.all([loadSearch(), loadMatrixView()]);
 }
 
 function escapeHtml(value) {
   return (value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
+
+const DOC_ORDER = ['Klage', 'Klageerwiderung', 'Replik', 'Duplik', 'Stellungnahme'];
+const LINK_COLORS = {
+  ATTACKS_FACTS: '#c0392b',
+  ATTACKS_LEGAL: '#8e44ad',
+  RAISES_DEFENSE: '#2c3e50',
+  SUPPORTS: '#7f8c8d',
+  DISTINGUISHES: '#16a085',
+};
+
+let matrixRows = [];
+let matrixLinks = [];
 
 async function loadSearch() {
   const q = document.getElementById('q').value;
@@ -50,18 +62,139 @@ async function loadOutline() {
 
 async function setLinkStatus(id, status) {
   await fetch('/api/links/' + id, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
-  await loadMatrix();
+  await loadMatrixView();
 }
 
 async function deleteLink(id) {
   await fetch('/api/links/' + id, {method:'DELETE'});
-  await loadMatrix();
+  await loadMatrixView();
 }
 
-async function loadMatrix() {
-  const data = await (await fetch('/api/matrix')).json();
-  const el = document.getElementById('matrixData');
-  el.innerHTML = data.map(x => `<div class='card'><b>${x.from_title}</b> ↔ <b>${x.to_title}</b><br>Typ: ${x.link_type} | Konfidenz: ${x.confidence.toFixed(2)} | Status: ${x.status}<br>${x.rationale_short}<br><button onclick="setLinkStatus(${x.id},'confirmed')">confirm</button><button onclick="setLinkStatus(${x.id},'rejected')">reject</button><button onclick="setLinkStatus(${x.id},'proposed')">proposed</button><button onclick="deleteLink(${x.id})">löschen</button></div>`).join('');
+function buildFilterQuery() {
+  const issue = document.getElementById('matrixIssue').value;
+  const linkType = document.getElementById('matrixLinkType').value;
+  const status = document.getElementById('matrixStatus').value;
+  const minConf = document.getElementById('matrixConfidence').value || '0.7';
+  const unanswered = document.getElementById('matrixUnansweredOnly').checked;
+  const ourGapsOnly = document.getElementById('matrixOurGapsOnly').checked;
+
+  const params = new URLSearchParams({min_conf: minConf});
+  if (issue) params.set('issue', issue);
+  if (linkType) params.set('link_type', linkType);
+  if (status) params.set('status', status);
+  if (unanswered) params.set('unanswered_only', 'true');
+  if (ourGapsOnly) params.set('our_gaps_only', 'true');
+  return params.toString();
+}
+
+function renderSelect(id, values, includeAllLabel = 'Alle') {
+  const el = document.getElementById(id);
+  if (!el.dataset.loaded) {
+    el.innerHTML = `<option value="">${includeAllLabel}</option>` + values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+    el.dataset.loaded = '1';
+  }
+}
+
+function badge(text, css = 'status') {
+  return `<span class="badge ${css}">${escapeHtml(text)}</span>`;
+}
+
+function cardHtml(item) {
+  if (item.type === 'GAP_OPPONENT') {
+    return `<div class="matrix-card gap"><div>${escapeHtml(item.text)}</div></div>`;
+  }
+  const issues = (item.issues || []).map(i => badge(i, 'issue')).join(' ');
+  const roles = (item.roles || []).map(r => badge(r, 'role')).join(' ');
+  const badges = (item.badges || []).map(b => badge(b, b.includes('Unbeantwortet') ? 'warning' : 'danger')).join(' ');
+  const docIdx = DOC_ORDER.indexOf(item.doc_type);
+  return `<div class="matrix-card" onclick="loadThread(${item.id})">
+    <div class="matrix-card-title">${escapeHtml(item.short_title || item.title)}</div>
+    <div class="matrix-meta">${badge(item.doc_type || 'n/a', 'doc')} ${badge(item.side || 'n/a', 'side')} ${badge((docIdx >= 0 ? docIdx + 1 : '-') + '. Schritt', 'doc')}</div>
+    <div class="matrix-meta">${issues} ${roles}</div>
+    <div class="matrix-meta">${badges}</div>
+    <div class="matrix-links">
+      ${(item.out_links || []).map(l => `<span class="link-badge" style="background:${LINK_COLORS[l.link_type] || '#34495e'}" title="${escapeHtml(l.rationale_short || '')}">${escapeHtml(l.link_type)} (${l.confidence.toFixed(2)}) • ${escapeHtml(l.status)}</span>`).join('')}
+    </div>
+  </div>`;
+}
+
+function buildVirtualRows(rows) {
+  const rowHeight = 280;
+  const buffer = 6;
+  const viewport = document.getElementById('matrixData');
+  const totalHeight = rows.length * rowHeight;
+
+  viewport.innerHTML = `<div class="virtual-spacer" style="height:${totalHeight}px"></div><div class="virtual-content"></div>`;
+  const content = viewport.querySelector('.virtual-content');
+
+  function render() {
+    const scrollTop = viewport.scrollTop;
+    const viewportHeight = viewport.clientHeight;
+    const start = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer);
+    const end = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + buffer);
+    const visible = rows.slice(start, end);
+
+    content.style.transform = `translateY(${start * rowHeight}px)`;
+    content.innerHTML = visible.map(row => `
+      <div class="issue-row" style="height:${rowHeight - 10}px">
+        <div class="issue-title">${escapeHtml(row.issue)}</div>
+        <div class="matrix-column">
+          <h4>PLAINTIFF</h4>
+          ${row.plaintiff.map(cardHtml).join('') || '<div class="matrix-empty">—</div>'}
+        </div>
+        <div class="matrix-column">
+          <h4>DEFENDANT</h4>
+          ${row.defendant.map(cardHtml).join('') || '<div class="matrix-empty">—</div>'}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  viewport.onscroll = render;
+  render();
+}
+
+function renderEdges() {
+  const legend = document.createElement('div');
+  legend.className = 'edge-legend card';
+  legend.innerHTML = `<b>Verbindungen (farbcodiert)</b><br>` + matrixLinks.map(l => {
+    return `<div><span class="edge-dot" style="background:${LINK_COLORS[l.link_type] || '#34495e'}"></span> ${escapeHtml(l.link_type)}: #${l.from_argument_id} → #${l.to_argument_id} <span title="${escapeHtml(l.rationale_short || '')}">ℹ</span></div>`;
+  }).join('');
+  const root = document.getElementById('matrixData');
+  root.prepend(legend);
+}
+
+async function loadMatrixView() {
+  const data = await (await fetch('/api/matrix-view?' + buildFilterQuery())).json();
+  matrixRows = data.rows || [];
+  matrixLinks = data.links || [];
+
+  renderSelect('matrixIssue', data.meta?.issues || []);
+  renderSelect('matrixLinkType', data.meta?.link_types || []);
+  renderSelect('matrixStatus', data.meta?.statuses || []);
+
+  buildVirtualRows(matrixRows);
+  renderEdges();
+}
+
+async function loadThread(argumentId) {
+  const minConf = document.getElementById('matrixConfidence').value || '0.7';
+  const data = await (await fetch(`/api/thread/${argumentId}?min_conf=${minConf}`)).json();
+  const el = document.getElementById('threadData');
+  const seq = data.sequence || [];
+  if (!seq.length) {
+    el.innerHTML = 'Kein Thread gefunden.';
+    return;
+  }
+  el.innerHTML = seq.map(node => {
+    if (node.type === 'argument') {
+      return `<div class="thread-item"><b>${escapeHtml(node.doc_type)} (${escapeHtml(node.side)})</b><br>${escapeHtml(node.title)}</div>`;
+    }
+    if (node.type === 'link') {
+      return `<div class="thread-link">↓ ${escapeHtml(node.link_type)} <span title="${escapeHtml(node.rationale_short || '')}">(${node.confidence.toFixed(2)})</span></div>`;
+    }
+    return `<div class="thread-gap">${escapeHtml(node.text)}</div>`;
+  }).join('');
 }
 
 async function loadTables() {
@@ -71,5 +204,5 @@ async function loadTables() {
 }
 
 window.onload = async () => {
-  await Promise.all([loadSearch(), loadOutline(), loadMatrix(), loadTables()]);
+  await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
 };
