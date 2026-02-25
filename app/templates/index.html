@@ -17,11 +17,12 @@
     <button onclick="showTab('outline')">Outline</button>
     <button onclick="showTab('matrix')">Matrix</button>
     <button onclick="showTab('tables')">Tables</button>
+    <button onclick="showTab('cleaning')">Bereinigung</button>
   </div>
 
   <section id="search" class="tab">
     <h2>Suche</h2>
-    <input id="q" placeholder="Volltext / Summary" /><label style="margin-left:12px"><input id="showRubrum" type="checkbox" onchange="loadSearch()" /> Rubrum anzeigen</label><button onclick="loadSearch()">Suchen</button>
+    <input id="q" placeholder="Volltext / Summary" /><label style="margin-left:12px"><input id="showRubrum" type="checkbox" onchange="loadSearch()" /> Rubrum anzeigen</label><label style="margin-left:12px"><input id="showNoise" type="checkbox" onchange="loadSearch()" /> Noise anzeigen</label><button onclick="loadSearch()">Suchen</button>
     <div id="mergeStats"></div>
     <div id="searchResults"></div>
   </section>
@@ -54,6 +55,18 @@
   <section id="tables" class="tab hidden">
     <h2>Tabellen</h2>
     <div id="tablesData"></div>
+  </section>
+
+
+  <section id="cleaning" class="tab hidden">
+    <h2>Bereinigung</h2>
+    <div class="matrix-toolbar">
+      <label>Dokument-ID <input id="cleanDocId" placeholder="z.B. D1" /></label>
+      <label>Grund <input id="cleanReason" placeholder="PAGE_NUMBER_RULE" /></label>
+      <label>Textsuche <input id="cleanQ" placeholder="Filtertext" /></label>
+      <button onclick="loadCleaning()">Filter anwenden</button>
+    </div>
+    <div id="cleaningData"></div>
   </section>
 
   <script src="/static/app.js"></script>

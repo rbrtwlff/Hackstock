@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS documents (
     ocr_normalized INTEGER DEFAULT 0,
     raw_paragraph_count INTEGER DEFAULT 0,
     semantic_block_count INTEGER DEFAULT 0,
+    removed_lines_count INTEGER DEFAULT 0,
+    kept_account_headings_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS table_blocks (
@@ -40,6 +42,16 @@ CREATE TABLE IF NOT EXISTS paragraphs (
     content_hash TEXT NOT NULL UNIQUE,
     FOREIGN KEY(document_id) REFERENCES documents(id)
 );
+CREATE TABLE IF NOT EXISTS removed_lines (
+    id INTEGER PRIMARY KEY,
+    doc_id TEXT NOT NULL,
+    paragraph_id INTEGER,
+    text TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(paragraph_id) REFERENCES paragraphs(id)
+);
+
 CREATE TABLE IF NOT EXISTS semantic_blocks (
     id INTEGER PRIMARY KEY,
     document_id INTEGER NOT NULL,
@@ -146,6 +158,21 @@ def _migrate(conn):
         conn.execute("ALTER TABLE documents ADD COLUMN raw_paragraph_count INTEGER DEFAULT 0")
     if 'semantic_block_count' not in columns:
         conn.execute("ALTER TABLE documents ADD COLUMN semantic_block_count INTEGER DEFAULT 0")
+    if 'removed_lines_count' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN removed_lines_count INTEGER DEFAULT 0")
+    if 'kept_account_headings_count' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN kept_account_headings_count INTEGER DEFAULT 0")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS removed_lines (
+        id INTEGER PRIMARY KEY,
+        doc_id TEXT NOT NULL,
+        paragraph_id INTEGER,
+        text TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(paragraph_id) REFERENCES paragraphs(id)
+    )"""
+    )
 
 
 def init_db(path: str):

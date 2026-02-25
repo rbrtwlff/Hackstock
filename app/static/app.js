@@ -38,24 +38,8 @@ function ensureStatusPolling() {
 }
 
 async function runAll() {
-  const resp = await fetch('/api/run-all', {method: 'POST'});
-  const data = await resp.json();
-
-  if (resp.status === 409) {
-    renderRunStatus(data, 'Bereits laufender Job. Zeige Status.');
-    ensureStatusPolling();
-    await fetchStatus();
-    return;
-  }
-
-  if (!resp.ok) {
-    renderRunStatus({phase: 'error', running: false, last_error: data?.error || 'run-all failed'}, 'RUN ALL fehlgeschlagen');
-    return;
-  }
-
-  renderRunStatus({phase: 'starting', running: true, job_id: data.job_id}, `RUN ALL gestartet (Job ${data.job_id})`);
-  ensureStatusPolling();
-  await fetchStatus();
+  await fetch('/api/run-all', {method: 'POST'});
+  await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables(), loadCleaning()]);
 }
 
 async function retryFailed() {
@@ -82,26 +66,34 @@ let matrixLinks = [];
 async function loadSearch() {
   const q = document.getElementById('q').value;
   const includeRubrum = document.getElementById('showRubrum').checked;
-  const data = await (await fetch('/api/paragraphs?q=' + encodeURIComponent(q) + '&include_rubrum=' + includeRubrum)).json();
+  const includeNoise = document.getElementById('showNoise').checked;
+  const data = await (await fetch('/api/paragraphs?q=' + encodeURIComponent(q) + '&include_rubrum=' + includeRubrum + '&include_noise=' + includeNoise)).json();
   const el = document.getElementById('searchResults');
   const statsEl = document.getElementById('mergeStats');
 
   const stats = {};
   data.forEach(x => {
     if (!stats[x.doc_id]) {
-      stats[x.doc_id] = {raw: x.raw_paragraph_count, semantic: x.semantic_block_count};
+      stats[x.doc_id] = {raw: x.raw_paragraph_count, semantic: x.semantic_block_count, removed: x.removed_lines_count, keptAccounts: x.kept_account_headings_count};
     }
   });
   statsEl.innerHTML = Object.entries(stats)
-    .map(([doc, s]) => `<div class='card'><b>${doc}</b> Paragraphs merged: ${s.raw} raw -> ${s.semantic} blocks</div>`)
+    .map(([doc, s]) => `<div class='card'><b>${doc}</b> Paragraphs merged: ${s.raw} raw -> ${s.semantic} blocks | removed: ${s.removed} | kept account headings: ${s.keptAccounts}</div>`)
     .join('');
 
-  el.innerHTML = data.map(x => {
+  const cards = data.map(x => {
     const intro = x.intro_text ? `<div><b>Einleitung</b><br>${escapeHtml(x.intro_text)}</div>` : '';
     const quote = x.quote_text ? `<blockquote>${escapeHtml(x.quote_text)}</blockquote>` : '';
     const body = (!x.quote_text || x.block_type === 'QUOTE_BLOCK') ? `<div>${escapeHtml(x.text)}</div>` : '';
     return `<div class="card"><b>${x.doc_id} (${x.side})</b> <span>${x.block_type}</span><br>${escapeHtml(x.hierarchy_path || '')}<hr>${intro}${quote}${body}<hr><i>${escapeHtml(x.summary||'')}</i><br>Role: ${escapeHtml(x.role||'')}<br>Issues: ${(x.issues||[]).join(', ')}</div>`;
-  }).join('');
+  });
+
+  if (includeNoise) {
+    const removed = await (await fetch('/api/removed-lines')).json();
+    removed.forEach(r => cards.push(`<div class="card"><b>${escapeHtml(r.doc_id)} (${escapeHtml(r.side || '')})</b> <span>NOISE</span><hr>${escapeHtml(r.text)}<br><i>${escapeHtml(r.reason)}</i></div>`));
+  }
+
+  el.innerHTML = cards.join('');
 }
 
 async function loadOutline() {
@@ -254,6 +246,20 @@ async function loadTables() {
 }
 
 window.onload = async () => {
-  await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
-  await fetchStatus();
+  await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables(), loadCleaning()]);
 };
+
+
+async function loadCleaning() {
+  const docId = document.getElementById('cleanDocId')?.value || '';
+  const reason = document.getElementById('cleanReason')?.value || '';
+  const q = document.getElementById('cleanQ')?.value || '';
+  const params = new URLSearchParams();
+  if (docId) params.set('doc_id', docId);
+  if (reason) params.set('reason', reason);
+  if (q) params.set('q', q);
+  const data = await (await fetch('/api/removed-lines?' + params.toString())).json();
+  const el = document.getElementById('cleaningData');
+  if (!el) return;
+  el.innerHTML = data.map(r => `<div class="card"><b>${escapeHtml(r.doc_id)}</b> (${escapeHtml(r.side || '')})<br><span>${escapeHtml(r.reason)}</span><hr>${escapeHtml(r.text)}</div>`).join('') || '<div class="card">Keine entfernten Zeilen.</div>';
+}

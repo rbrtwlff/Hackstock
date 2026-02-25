@@ -12,7 +12,7 @@ from docx import Document
 from app.config import AppConfig
 from app.db import db_conn
 from app.llm import LLMClient
-from app.parser import DOC_ORDER, build_hierarchy, build_semantic_blocks, file_hash, normalize_ocr_lines, should_ocr_normalize, table_to_json
+from app.parser import DOC_ORDER, build_hierarchy, build_semantic_blocks, clean_ocr_noise, file_hash, normalize_ocr_lines, should_ocr_normalize, table_to_json
 
 logger = logging.getLogger("pipeline")
 
@@ -72,17 +72,34 @@ class Pipeline:
         conn.execute("DELETE FROM semantic_blocks WHERE document_id=?", (document_id,))
         conn.execute("DELETE FROM paragraphs WHERE document_id=?", (document_id,))
 
-        parsed = build_hierarchy(paras, styles)
+        conn.execute("DELETE FROM removed_lines WHERE doc_id=(SELECT doc_id FROM documents WHERE id=?)", (document_id,))
+
+        def _classify_ambiguous(line: str, prev_line: str | None, next_line: str | None) -> tuple[str, str]:
+            try:
+                result = asyncio.run(self.llm.classify_noise_line(line, prev_line=prev_line, next_line=next_line))
+                return result.get("action", "KEEP"), result.get("reason", "fallback_keep")
+            except Exception:
+                return "KEEP", "fallback_keep"
+
+        clean_result = clean_ocr_noise(paras, styles, classify_ambiguous=_classify_ambiguous)
+
+        parsed = build_hierarchy(clean_result.kept_paragraphs, clean_result.kept_styles)
         para_ids_by_idx = {}
-        for para in parsed:
-            h = hashlib.sha256(f"{document_id}:{para.para_index}:{para.text}".encode()).hexdigest()
+        for para, source_idx in zip(parsed, clean_result.kept_indexes):
+            h = hashlib.sha256(f"{document_id}:{source_idx}:{para.text}".encode()).hexdigest()
             conn.execute(
                 """INSERT INTO paragraphs(document_id,para_index,text,style,is_heading,hierarchy_path,continuation_group,content_hash)
                 VALUES(?,?,?,?,?,?,?,?)""",
-                (document_id, para.para_index, para.text, para.style, int(para.is_heading), para.hierarchy_path, para.continuation_group, h),
+                (document_id, source_idx, para.text, para.style, int(para.is_heading), para.hierarchy_path, para.continuation_group, h),
             )
             para_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             para_ids_by_idx[para.para_index] = para_id
+
+        for removed in clean_result.removed_lines:
+            conn.execute(
+                "INSERT INTO removed_lines(doc_id, paragraph_id, text, reason) VALUES((SELECT doc_id FROM documents WHERE id=?), NULL, ?, ?)",
+                (document_id, removed.text, removed.reason),
+            )
 
         semantic_blocks = build_semantic_blocks(parsed)
         for b in semantic_blocks:
@@ -110,9 +127,8 @@ class Pipeline:
             )
 
         conn.execute(
-            "UPDATE documents SET raw_paragraph_count=?, semantic_block_count=? WHERE id=?",
-            (len(parsed), len(semantic_blocks)),
-            document_id,
+            "UPDATE documents SET raw_paragraph_count=?, semantic_block_count=?, removed_lines_count=?, kept_account_headings_count=? WHERE id=?",
+            (len(paras), len(semantic_blocks), len(clean_result.removed_lines), clean_result.kept_account_headings_count, document_id),
         )
 
     def normalize_documents(self):
