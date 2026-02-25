@@ -3,6 +3,40 @@ function showTab(id) {
   document.getElementById(id).classList.remove('hidden');
 }
 
+let statusPoller = null;
+
+function renderRunStatus(state, infoMessage = '') {
+  const el = document.getElementById('runStatus');
+  if (!el) return;
+  const msg = infoMessage ? `<div><b>${escapeHtml(infoMessage)}</b></div>` : '';
+  el.innerHTML = `${msg}
+    <div>Status: <b>${escapeHtml(state.phase || 'unknown')}</b> ${state.running ? '⏳' : '✅'}</div>
+    <div>Job: ${escapeHtml(state.job_id || '-')}</div>
+    <div>Docs: ${state.docs_done || 0} / ${state.docs_total || 0}</div>
+    <div>Blocks: ${state.blocks_done || 0} / ${state.blocks_total || 0}</div>
+    <div>LLM done: ${state.llm_done || 0}, Failed: ${state.failed || 0}</div>
+    <div>Last error: ${escapeHtml(state.last_error || '-')}</div>`;
+}
+
+async function fetchStatus() {
+  const resp = await fetch('/api/status');
+  const state = await resp.json();
+  renderRunStatus(state);
+
+  if (!state.running && statusPoller) {
+    clearInterval(statusPoller);
+    statusPoller = null;
+    await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
+  }
+}
+
+function ensureStatusPolling() {
+  if (statusPoller) return;
+  statusPoller = setInterval(() => {
+    fetchStatus().catch(err => console.error('status poll failed', err));
+  }, 2000);
+}
+
 async function runAll() {
   await fetch('/api/run-all', {method: 'POST'});
   await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables(), loadCleaning()]);
