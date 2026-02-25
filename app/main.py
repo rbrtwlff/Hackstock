@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.config import load_config
 from app.db import db_conn, init_db
+from app.matrix_view import build_matrix_payload, build_thread_payload
 from app.pipeline import Pipeline
 
 config = load_config()
@@ -123,6 +124,35 @@ def matrix(link_type: str | None = None, status: str | None = None, min_conf: fl
                 continue
             out.append(dict(r))
         return out
+
+
+@app.get("/api/matrix-view")
+def matrix_view(
+    issue: str | None = None,
+    link_type: str | None = None,
+    status: str | None = None,
+    min_conf: float = 0.7,
+    unanswered_only: bool = False,
+    our_gaps_only: bool = False,
+    our_side: str = "PLAINTIFF",
+):
+    with db_conn(config.db_path) as conn:
+        return build_matrix_payload(
+            conn,
+            min_confidence=min_conf,
+            include_unanswered_only=unanswered_only,
+            include_our_gaps_only=our_gaps_only,
+            issue_filter=issue,
+            link_type_filter=link_type,
+            status_filter=status,
+            our_side=our_side,
+        )
+
+
+@app.get("/api/thread/{argument_id}")
+def thread(argument_id: int, min_conf: float = 0.7):
+    with db_conn(config.db_path) as conn:
+        return build_thread_payload(conn, argument_id=argument_id, min_confidence=min_conf)
 
 
 @app.get("/api/tables")
