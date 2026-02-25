@@ -129,13 +129,17 @@ class Pipeline:
                             conn.execute("UPDATE paragraphs SET text=? WHERE id=?", (t, rows[i]["id"]))
                 conn.execute("UPDATE documents SET ocr_normalized=? WHERE id=?", (1 if trig else 0, d[0]))
 
-    async def analyze_semantic_blocks(self, only_failed: bool = False):
+    async def analyze_semantic_blocks(self, only_failed: bool = False, progress_callback=None, log_every: int = 10):
         with db_conn(self.config.db_path) as conn:
             query = f"""SELECT sb.id,sb.text_normalized,sb.hierarchy_path,sbj.attempts
             FROM semantic_blocks sb JOIN semantic_block_jobs sbj ON sb.id=sbj.block_id
             WHERE sb.block_type IN ('BODY','BODY_WITH_QUOTE','QUOTE_BLOCK')
             AND sbj.status IN ({"'FAILED'" if only_failed else "'PENDING','FAILED'"})"""
             jobs = conn.execute(query).fetchall()
+
+        blocks_total = len(jobs)
+        blocks_done = 0
+        failed = 0
 
         for job in jobs:
             block_id, text, hierarchy, attempts = job
@@ -170,10 +174,25 @@ class Pipeline:
                         ),
                     )
                     conn.execute("UPDATE semantic_block_jobs SET status='DONE',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE block_id=?", (block_id,))
+                blocks_done += 1
+                if progress_callback:
+                    progress_callback("block_done", {"blocks_done": blocks_done, "blocks_total": blocks_total, "failed": failed})
+                if log_every and blocks_done % log_every == 0:
+                    logger.info("Semantic block analysis progress: %s/%s (failed=%s)", blocks_done, blocks_total, failed)
+                    if progress_callback:
+                        progress_callback("block_log", {"blocks_done": blocks_done, "blocks_total": blocks_total, "failed": failed})
             except Exception as exc:
+                failed += 1
+                blocks_done += 1
                 with db_conn(self.config.db_path) as conn:
                     status = "FAILED" if attempts + 1 >= 3 else "PENDING"
                     conn.execute("UPDATE semantic_block_jobs SET status=?,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE block_id=?", (status, str(exc)[:500], block_id))
+                if progress_callback:
+                    progress_callback("block_done", {"blocks_done": blocks_done, "blocks_total": blocks_total, "failed": failed})
+                if log_every and blocks_done % log_every == 0:
+                    logger.info("Semantic block analysis progress: %s/%s (failed=%s)", blocks_done, blocks_total, failed)
+                    if progress_callback:
+                        progress_callback("block_log", {"blocks_done": blocks_done, "blocks_total": blocks_total, "failed": failed})
 
     def _neighbor_context(self, block_id: int) -> str:
         with db_conn(self.config.db_path) as conn:

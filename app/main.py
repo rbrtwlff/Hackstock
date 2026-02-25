@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import time
+import uuid
 import webbrowser
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -20,6 +24,85 @@ pipeline = Pipeline(config)
 
 app = FastAPI(title="Nebenkosten Viewer")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+logger = logging.getLogger("app.main")
+
+
+job_lock = threading.Lock()
+job_state = {
+    "running": False,
+    "job_id": None,
+    "phase": "idle",
+    "docs_total": 0,
+    "docs_done": 0,
+    "blocks_total": 0,
+    "blocks_done": 0,
+    "llm_done": 0,
+    "failed": 0,
+    "last_error": None,
+    "started_at": None,
+}
+
+
+def _set_job_state(**updates):
+    with job_lock:
+        job_state.update(updates)
+
+
+def _snapshot_job_state() -> dict:
+    with job_lock:
+        return dict(job_state)
+
+
+def _refresh_totals() -> None:
+    with db_conn(config.db_path) as conn:
+        docs_total = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        blocks_total = conn.execute(
+            """SELECT COUNT(*) FROM semantic_blocks
+            WHERE block_type IN ('BODY','BODY_WITH_QUOTE','QUOTE_BLOCK')"""
+        ).fetchone()[0]
+    _set_job_state(docs_total=docs_total, docs_done=docs_total, blocks_total=blocks_total)
+
+
+def _progress_callback(event_type: str, payload: dict):
+    if event_type == "block_done":
+        blocks_done = payload.get("blocks_done", 0)
+        failed = payload.get("failed", 0)
+        _set_job_state(blocks_done=blocks_done, llm_done=blocks_done, failed=failed)
+    if event_type == "block_log":
+        logger.info(
+            "RUN ALL progress: %s/%s blocks processed (%s failed)",
+            payload.get("blocks_done", 0),
+            payload.get("blocks_total", 0),
+            payload.get("failed", 0),
+        )
+
+
+def run_pipeline_job() -> None:
+    try:
+        _set_job_state(phase="importing")
+        pipeline.import_documents()
+        _refresh_totals()
+
+        _set_job_state(phase="normalizing")
+        pipeline.normalize_documents()
+
+        _set_job_state(phase="analyzing")
+        import asyncio
+
+        asyncio.run(pipeline.analyze_semantic_blocks(progress_callback=_progress_callback))
+
+        _set_job_state(phase="building_arguments")
+        pipeline.build_arguments()
+
+        _set_job_state(phase="linking")
+        asyncio.run(pipeline.propose_links())
+
+        _set_job_state(phase="done")
+    except Exception as exc:
+        logger.exception("RUN ALL job failed")
+        _set_job_state(phase="error", last_error=repr(exc))
+    finally:
+        _set_job_state(running=False)
 
 
 class LinkUpdate(BaseModel):
@@ -41,8 +124,41 @@ def index():
 
 @app.post("/api/run-all")
 def run_all():
-    pipeline.run_all()
-    return {"ok": True}
+    with job_lock:
+        if job_state["running"]:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "started": False,
+                    "running": True,
+                    "job_id": job_state["job_id"],
+                    "error": "already running",
+                },
+            )
+        job_state.update(
+            {
+                "running": True,
+                "job_id": str(uuid.uuid4()),
+                "phase": "starting",
+                "docs_total": 0,
+                "docs_done": 0,
+                "blocks_total": 0,
+                "blocks_done": 0,
+                "llm_done": 0,
+                "failed": 0,
+                "last_error": None,
+                "started_at": int(time.time()),
+            }
+        )
+        current_job_id = job_state["job_id"]
+
+    threading.Thread(target=run_pipeline_job, daemon=True).start()
+    return {"started": True, "job_id": current_job_id, "running": True}
+
+
+@app.get("/api/status")
+def status():
+    return _snapshot_job_state()
 
 
 @app.post("/api/retry-failed")

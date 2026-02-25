@@ -3,9 +3,59 @@ function showTab(id) {
   document.getElementById(id).classList.remove('hidden');
 }
 
+let statusPoller = null;
+
+function renderRunStatus(state, infoMessage = '') {
+  const el = document.getElementById('runStatus');
+  if (!el) return;
+  const msg = infoMessage ? `<div><b>${escapeHtml(infoMessage)}</b></div>` : '';
+  el.innerHTML = `${msg}
+    <div>Status: <b>${escapeHtml(state.phase || 'unknown')}</b> ${state.running ? '⏳' : '✅'}</div>
+    <div>Job: ${escapeHtml(state.job_id || '-')}</div>
+    <div>Docs: ${state.docs_done || 0} / ${state.docs_total || 0}</div>
+    <div>Blocks: ${state.blocks_done || 0} / ${state.blocks_total || 0}</div>
+    <div>LLM done: ${state.llm_done || 0}, Failed: ${state.failed || 0}</div>
+    <div>Last error: ${escapeHtml(state.last_error || '-')}</div>`;
+}
+
+async function fetchStatus() {
+  const resp = await fetch('/api/status');
+  const state = await resp.json();
+  renderRunStatus(state);
+
+  if (!state.running && statusPoller) {
+    clearInterval(statusPoller);
+    statusPoller = null;
+    await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
+  }
+}
+
+function ensureStatusPolling() {
+  if (statusPoller) return;
+  statusPoller = setInterval(() => {
+    fetchStatus().catch(err => console.error('status poll failed', err));
+  }, 2000);
+}
+
 async function runAll() {
-  await fetch('/api/run-all', {method: 'POST'});
-  await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
+  const resp = await fetch('/api/run-all', {method: 'POST'});
+  const data = await resp.json();
+
+  if (resp.status === 409) {
+    renderRunStatus(data, 'Bereits laufender Job. Zeige Status.');
+    ensureStatusPolling();
+    await fetchStatus();
+    return;
+  }
+
+  if (!resp.ok) {
+    renderRunStatus({phase: 'error', running: false, last_error: data?.error || 'run-all failed'}, 'RUN ALL fehlgeschlagen');
+    return;
+  }
+
+  renderRunStatus({phase: 'starting', running: true, job_id: data.job_id}, `RUN ALL gestartet (Job ${data.job_id})`);
+  ensureStatusPolling();
+  await fetchStatus();
 }
 
 async function retryFailed() {
@@ -205,4 +255,5 @@ async function loadTables() {
 
 window.onload = async () => {
   await Promise.all([loadSearch(), loadOutline(), loadMatrixView(), loadTables()]);
+  await fetchStatus();
 };
