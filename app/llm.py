@@ -135,11 +135,7 @@ class LLMClient:
         return schedule[idx] + random.uniform(0, 1)
 
     def _is_retryable_http_status(self, resp: httpx.Response) -> bool:
-        if resp.status_code in {502, 503, 504}:
-            return True
-        if resp.status_code == 429 and self._is_engine_overloaded(resp):
-            return True
-        return False
+        return resp.status_code in {429, 502, 503, 504}
 
     def _is_non_retryable_http_status(self, resp: httpx.Response) -> bool:
         if resp.status_code in {401, 403}:
@@ -195,7 +191,7 @@ class LLMClient:
         }
         payload = self._apply_model_overrides(payload)
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
-        timeout = httpx.Timeout(connect=15.0, read=max(180.0, float(self.config.timeout_seconds)), write=30.0, pool=15.0)
+        timeout = httpx.Timeout(connect=20.0, read=240.0, write=60.0, pool=20.0)
         max_attempts = 6
         empty_content_retry_count = 0
         parse_retry_count = 0
@@ -274,11 +270,15 @@ class LLMClient:
                 raise RuntimeError("LLM request exhausted fallback paths")
             except Exception as exc:
                 status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) and exc.response else None
-                error_text = self._error_text(exc.response) if isinstance(exc, httpx.HTTPStatusError) and exc.response else str(exc)
+                error_text = self._error_text(exc.response) if isinstance(exc, httpx.HTTPStatusError) and exc.response else f"{type(exc).__name__}: {repr(exc)}"
                 response_excerpt = exc.response.text[:2000] if isinstance(exc, httpx.HTTPStatusError) and exc.response else None
+                if status_code is not None:
+                    error_summary = f"HTTP {status_code}: {type(exc).__name__}: {repr(exc)}"
+                else:
+                    error_summary = f"{type(exc).__name__}: {repr(exc)}"
                 self._consecutive_failures += 1
                 self._update_job_state(
-                    last_error=str(exc),
+                    last_error=error_summary,
                     llm_failed_increment=1,
                     last_llm_status_code=status_code,
                     last_llm_response_excerpt=response_excerpt,
@@ -286,24 +286,26 @@ class LLMClient:
                 )
                 if self._consecutive_failures > 20:
                     self._update_job_state(phase="error", running=False)
-                self._log_debug(logging.ERROR, "LLM request failed: %s", str(exc), exc_info=True)
+                self._log_debug(logging.ERROR, f"LLM request failed: {type(exc).__name__}: {repr(exc)}", exc_info=True)
                 self._record_failure(error_text, status_code, request_payload)
-                retryable_exception = isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.NetworkError))
+                retryable_exception = isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.TransportError))
                 retryable_http = isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and self._is_retryable_http_status(exc.response)
                 non_retryable_http = isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and self._is_non_retryable_http_status(exc.response)
                 if non_retryable_http or (not retryable_exception and not retryable_http):
                     raise
                 if attempt == max_attempts:
-                    final_error = f"LLM call failed after {max_attempts} attempts: {error_text}"
+                    final_error = f"LLM call failed after {max_attempts} attempts: {error_summary}"
                     self._update_job_state(last_error=final_error)
                     raise RuntimeError(final_error) from exc
                 wait_seconds = self._retry_delay(attempt)
+                retry_reason = error_summary if status_code is not None else f"{type(exc).__name__}: {repr(exc)}"
                 self._log_debug(
-                    logging.DEBUG,
-                    "Retrying LLM call attempt=%s in %.2fs due to %s",
+                    logging.WARNING,
+                    "Retrying LLM call attempt=%s/%s in %.2fs due to %s",
                     attempt + 1,
+                    max_attempts,
                     wait_seconds,
-                    error_text[:300],
+                    retry_reason[:600],
                 )
                 await asyncio.sleep(wait_seconds)
         raise RuntimeError("unreachable")
