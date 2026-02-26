@@ -15,6 +15,7 @@ class AppConfig(BaseModel):
     retries: int = 3
     max_parallelism: int = 1
     token_budget: int = 2200
+    max_tokens: int | None = None
     logging_mode: str = "errors+metadata"
     host: str = "127.0.0.1"
     port: int = 8000

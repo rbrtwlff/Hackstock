@@ -138,6 +138,15 @@ CREATE TABLE IF NOT EXISTS links_jobs (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(from_argument_id, to_argument_id)
 );
+CREATE TABLE IF NOT EXISTS llm_failures (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    model TEXT,
+    endpoint TEXT,
+    status_code INTEGER,
+    error_text TEXT NOT NULL,
+    request_payload_json TEXT
+);
 """
 
 
@@ -171,6 +180,17 @@ def _migrate(conn):
         reason TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(paragraph_id) REFERENCES paragraphs(id)
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS llm_failures (
+        id INTEGER PRIMARY KEY,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        model TEXT,
+        endpoint TEXT,
+        status_code INTEGER,
+        error_text TEXT NOT NULL,
+        request_payload_json TEXT
     )"""
     )
 
