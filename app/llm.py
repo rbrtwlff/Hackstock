@@ -82,6 +82,12 @@ class LLMClient:
             return 1
         return 0
 
+    def _apply_model_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        model = str(payload.get("model") or "")
+        if "kimi-k2.5" in model.lower():
+            payload["temperature"] = 1
+        return payload
+
     def _is_response_format_unsupported(self, resp: httpx.Response) -> bool:
         if resp.status_code != 400:
             return False
@@ -122,6 +128,7 @@ class LLMClient:
             "response_format": {"type": "json_object"},
             "max_tokens": self._max_tokens(),
         }
+        payload = self._apply_model_overrides(payload)
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
         backoff = 1
         for attempt in range(1, self.config.retries + 1):
@@ -137,6 +144,7 @@ class LLMClient:
                             },
                             {"role": "user", "content": user},
                         ]
+                    request_payload = self._apply_model_overrides(request_payload)
                     async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
                         self._log_debug(
                             logging.DEBUG,
@@ -145,6 +153,13 @@ class LLMClient:
                             self.config.base_url,
                             bool(self.config.api_key),
                             len(f"{system}\n{user}"),
+                        )
+                        self._log_debug(
+                            logging.DEBUG,
+                            "Sending LLM payload model=%s temperature=%s keys=%s",
+                            request_payload.get("model"),
+                            request_payload.get("temperature"),
+                            list(request_payload.keys())[:12],
                         )
                         resp = await client.post(f"{self.config.base_url}/chat/completions", json=request_payload, headers=headers)
                     response_excerpt = (resp.text or "")[:2000]
