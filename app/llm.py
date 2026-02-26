@@ -75,6 +75,13 @@ class LLMClient:
         body = resp.text.strip()
         return f"HTTP {resp.status_code}: {body}"[:2000]
 
+    def _temperature_for_model(self) -> int:
+        model = (self.config.model or "").lower()
+        # Moonshot Kimi K2.5 variants reject non-1 temperatures (API returns HTTP 400 otherwise).
+        if "kimi-k2.5" in model:
+            return 1
+        return 0
+
     def _is_response_format_unsupported(self, resp: httpx.Response) -> bool:
         if resp.status_code != 400:
             return False
@@ -111,7 +118,7 @@ class LLMClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0,
+            "temperature": self._temperature_for_model(),
             "response_format": {"type": "json_object"},
             "max_tokens": self._max_tokens(),
         }
