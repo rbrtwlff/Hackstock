@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import random
 import queue
 from typing import Any
 from logging.handlers import QueueHandler, QueueListener
@@ -117,6 +118,45 @@ class LLMClient:
                 ),
             )
 
+    def _is_engine_overloaded(self, resp: httpx.Response) -> bool:
+        if resp.status_code == 429:
+            return True
+        try:
+            body = resp.json()
+        except Exception:
+            return False
+        error = body.get("error") if isinstance(body, dict) else None
+        error_type = (error or {}).get("type") if isinstance(error, dict) else None
+        return str(error_type).lower() == "engine_overloaded_error"
+
+    def _first_json_object(self, content: str) -> str | None:
+        start = content.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(content)):
+            ch = content[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return content[start : idx + 1]
+        return None
+
     async def call_json(self, system: str, user: str) -> dict[str, Any]:
         payload = {
             "model": self.config.model,
@@ -130,7 +170,10 @@ class LLMClient:
         }
         payload = self._apply_model_overrides(payload)
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
-        backoff = 1
+        overload_schedule = [2, 4, 8, 16, 24, 30]
+        overload_retry_count = 0
+        empty_content_retry_count = 0
+        parse_retry_count = 0
         for attempt in range(1, self.config.retries + 1):
             try:
                 for without_response_format in (False, True):
@@ -165,15 +208,57 @@ class LLMClient:
                     response_excerpt = (resp.text or "")[:2000]
                     self._update_job_state(last_llm_status_code=resp.status_code, last_llm_response_excerpt=response_excerpt)
                     self._log_debug(logging.DEBUG, "LLM response received status=%s body=%s", resp.status_code, response_excerpt)
-                    if resp.status_code == 429:
-                        raise httpx.HTTPStatusError("rate limit", request=resp.request, response=resp)
+                    if self._is_engine_overloaded(resp):
+                        if overload_retry_count >= len(overload_schedule):
+                            raise httpx.HTTPStatusError("engine overloaded", request=resp.request, response=resp)
+                        wait_seconds = overload_schedule[overload_retry_count] + random.uniform(0, 1)
+                        overload_retry_count += 1
+                        self._log_debug(
+                            logging.WARNING,
+                            "Engine overloaded (status=%s). Retry %s/%s in %.2fs",
+                            resp.status_code,
+                            overload_retry_count,
+                            len(overload_schedule),
+                            wait_seconds,
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
                     if not without_response_format and self._is_response_format_unsupported(resp):
                         continue
                     resp.raise_for_status()
                     content = resp.json()["choices"][0]["message"]["content"]
+                    if not str(content).strip():
+                        if empty_content_retry_count >= 3:
+                            raise RuntimeError("LLM content empty after retries")
+                        empty_content_retry_count += 1
+                        wait_seconds = empty_content_retry_count + random.uniform(0, 1)
+                        self._log_debug(
+                            logging.WARNING,
+                            "LLM returned empty content. Retry %s/%s in %.2fs",
+                            empty_content_retry_count,
+                            3,
+                            wait_seconds,
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                    candidate = content if content.strip().startswith("{") else (self._first_json_object(content) or content)
+                    try:
+                        parsed = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        if parse_retry_count >= 1:
+                            raise
+                        parse_retry_count += 1
+                        self._log_debug(
+                            logging.WARNING,
+                            "Failed to parse LLM JSON (attempt %s/1). Content excerpt=%s",
+                            parse_retry_count,
+                            str(content)[:500],
+                        )
+                        await asyncio.sleep(0.5 + random.uniform(0, 1))
+                        continue
                     self._consecutive_failures = 0
                     self._update_job_state(consecutive_llm_failures=0)
-                    return json.loads(content)
+                    return parsed
                 raise RuntimeError("LLM request exhausted fallback paths")
             except Exception as exc:
                 status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) and exc.response else None
@@ -193,22 +278,41 @@ class LLMClient:
                 self._record_failure(error_text, status_code, request_payload)
                 if attempt == self.config.retries:
                     raise
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                await asyncio.sleep(min(2**attempt, 30))
         raise RuntimeError("unreachable")
 
     async def analyze_paragraph(self, text: str, context: str) -> ParagraphAnalysisModel:
         text = self.cap_text(text, self.config.token_budget)
         context = self.cap_text(context, max(200, self.config.token_budget // 3))
-        user = f"Kontext:\n{context}\n\nAbsatz:\n{text}\n\nGib NUR valides JSON laut Schema zurück."
-        system = "Du analysierst Schriftsatz-Absätze auf Deutsch."
+        user = (
+            f"Kontext:\n{context}\n\nAbsatz:\n{text}\n\n"
+            "Gib NUR valides JSON laut Schema zurück."
+        )
+        system = (
+            "Du analysierst Schriftsatz-Absätze auf Deutsch. "
+            "Return ONLY valid JSON matching this schema, no extra keys: "
+            "{"
+            '"keywords": ["..."], '
+            '"issues": ["..."], '
+            '"role": "FACT_ASSERTION|FACT_DENIAL|LEGAL_POSITION|SUBSUMPTION|CONTRACT_INTERPRETATION|CALCULATION|EVIDENCE_OFFER|EVIDENCE_ATTACK|PROCEDURAL|BACKGROUND_NARRATIVE|REQUEST_RELIEF|OTHER", '
+            '"summary_3_sentences": "exactly three sentences", '
+            '"continuation_of_previous": true|false, '
+            '"continuation_reason": "optional", '
+            '"citations_norms": ["..."], '
+            '"citations_cases": ["..."], '
+            '"citations_contract": ["..."], '
+            '"citations_exhibits": ["..."]'
+            "}."
+        )
         data = await self.call_json(system, user)
         try:
-            return ParagraphAnalysisModel.model_validate(data)
+            allowed = {key: data[key] for key in ParagraphAnalysisModel.model_fields.keys() if key in data}
+            return ParagraphAnalysisModel.model_validate(allowed)
         except Exception:
             repair_user = f"Mache aus folgendem JSON valides JSON für das gewünschte Schema, ohne Zusatztext:\n{json.dumps(data, ensure_ascii=False)}"
             fixed = await self.call_json("Return valid JSON only.", repair_user)
-            return ParagraphAnalysisModel.model_validate(fixed)
+            allowed = {key: fixed[key] for key in ParagraphAnalysisModel.model_fields.keys() if key in fixed}
+            return ParagraphAnalysisModel.model_validate(allowed)
 
 
 
