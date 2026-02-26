@@ -129,6 +129,31 @@ class LLMClient:
         error_type = (error or {}).get("type") if isinstance(error, dict) else None
         return str(error_type).lower() == "engine_overloaded_error"
 
+    def _retry_delay(self, attempt: int) -> float:
+        schedule = [2, 4, 8, 16, 24, 30]
+        idx = min(max(attempt - 1, 0), len(schedule) - 1)
+        return schedule[idx] + random.uniform(0, 1)
+
+    def _is_retryable_http_status(self, resp: httpx.Response) -> bool:
+        if resp.status_code in {502, 503, 504}:
+            return True
+        if resp.status_code == 429 and self._is_engine_overloaded(resp):
+            return True
+        return False
+
+    def _is_non_retryable_http_status(self, resp: httpx.Response) -> bool:
+        if resp.status_code in {401, 403}:
+            return True
+        if resp.status_code == 400:
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            error = body.get("error") if isinstance(body, dict) else None
+            error_type = (error or {}).get("type") if isinstance(error, dict) else None
+            return str(error_type).lower() == "invalid_request_error"
+        return False
+
     def _first_json_object(self, content: str) -> str | None:
         start = content.find("{")
         if start < 0:
@@ -170,11 +195,11 @@ class LLMClient:
         }
         payload = self._apply_model_overrides(payload)
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
-        overload_schedule = [2, 4, 8, 16, 24, 30]
-        overload_retry_count = 0
+        timeout = httpx.Timeout(connect=15.0, read=max(180.0, float(self.config.timeout_seconds)), write=30.0, pool=15.0)
+        max_attempts = 6
         empty_content_retry_count = 0
         parse_retry_count = 0
-        for attempt in range(1, self.config.retries + 1):
+        for attempt in range(1, max_attempts + 1):
             try:
                 for without_response_format in (False, True):
                     request_payload = dict(payload)
@@ -188,7 +213,7 @@ class LLMClient:
                             {"role": "user", "content": user},
                         ]
                     request_payload = self._apply_model_overrides(request_payload)
-                    async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
                         self._log_debug(
                             logging.DEBUG,
                             "LLM request started model=%s base_url=%s api_key_set=%s prompt_length=%s",
@@ -208,21 +233,8 @@ class LLMClient:
                     response_excerpt = (resp.text or "")[:2000]
                     self._update_job_state(last_llm_status_code=resp.status_code, last_llm_response_excerpt=response_excerpt)
                     self._log_debug(logging.DEBUG, "LLM response received status=%s body=%s", resp.status_code, response_excerpt)
-                    if self._is_engine_overloaded(resp):
-                        if overload_retry_count >= len(overload_schedule):
-                            raise httpx.HTTPStatusError("engine overloaded", request=resp.request, response=resp)
-                        wait_seconds = overload_schedule[overload_retry_count] + random.uniform(0, 1)
-                        overload_retry_count += 1
-                        self._log_debug(
-                            logging.WARNING,
-                            "Engine overloaded (status=%s). Retry %s/%s in %.2fs",
-                            resp.status_code,
-                            overload_retry_count,
-                            len(overload_schedule),
-                            wait_seconds,
-                        )
-                        await asyncio.sleep(wait_seconds)
-                        continue
+                    if self._is_retryable_http_status(resp):
+                        raise httpx.HTTPStatusError("retryable LLM status", request=resp.request, response=resp)
                     if not without_response_format and self._is_response_format_unsupported(resp):
                         continue
                     resp.raise_for_status()
@@ -276,9 +288,24 @@ class LLMClient:
                     self._update_job_state(phase="error", running=False)
                 self._log_debug(logging.ERROR, "LLM request failed: %s", str(exc), exc_info=True)
                 self._record_failure(error_text, status_code, request_payload)
-                if attempt == self.config.retries:
+                retryable_exception = isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.NetworkError))
+                retryable_http = isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and self._is_retryable_http_status(exc.response)
+                non_retryable_http = isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and self._is_non_retryable_http_status(exc.response)
+                if non_retryable_http or (not retryable_exception and not retryable_http):
                     raise
-                await asyncio.sleep(min(2**attempt, 30))
+                if attempt == max_attempts:
+                    final_error = f"LLM call failed after {max_attempts} attempts: {error_text}"
+                    self._update_job_state(last_error=final_error)
+                    raise RuntimeError(final_error) from exc
+                wait_seconds = self._retry_delay(attempt)
+                self._log_debug(
+                    logging.DEBUG,
+                    "Retrying LLM call attempt=%s in %.2fs due to %s",
+                    attempt + 1,
+                    wait_seconds,
+                    error_text[:300],
+                )
+                await asyncio.sleep(wait_seconds)
         raise RuntimeError("unreachable")
 
     async def analyze_paragraph(self, text: str, context: str) -> ParagraphAnalysisModel:
