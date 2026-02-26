@@ -39,12 +39,18 @@ job_state = {
     "llm_done": 0,
     "failed": 0,
     "last_error": None,
+    "last_llm_status_code": None,
+    "last_llm_response_excerpt": None,
+    "consecutive_llm_failures": 0,
     "started_at": None,
 }
 
 
 def _set_job_state(**updates):
     with job_lock:
+        llm_failed_increment = updates.pop("llm_failed_increment", 0)
+        if llm_failed_increment:
+            job_state["failed"] = job_state.get("failed", 0) + int(llm_failed_increment)
         job_state.update(updates)
 
 
@@ -75,6 +81,12 @@ def _progress_callback(event_type: str, payload: dict):
             payload.get("blocks_total", 0),
             payload.get("failed", 0),
         )
+
+
+
+
+pipeline.llm.set_job_state_updater(_set_job_state)
+pipeline.llm.set_debug_context_provider(_snapshot_job_state)
 
 
 def run_pipeline_job() -> None:
@@ -147,6 +159,9 @@ def run_all():
                 "llm_done": 0,
                 "failed": 0,
                 "last_error": None,
+                "last_llm_status_code": None,
+                "last_llm_response_excerpt": None,
+                "consecutive_llm_failures": 0,
                 "started_at": int(time.time()),
             }
         )

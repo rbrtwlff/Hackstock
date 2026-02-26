@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
+import queue
 from typing import Any
+from logging.handlers import QueueHandler, QueueListener
+from pathlib import Path
 
 import httpx
 
@@ -15,6 +19,47 @@ from app.models import LinkProposalModel, ParagraphAnalysisModel
 class LLMClient:
     def __init__(self, config: AppConfig):
         self.config = config
+        self._job_state_updater = None
+        self._context_provider = None
+        self._debug_logger = self._setup_debug_logger()
+        self._consecutive_failures = 0
+
+    def _setup_debug_logger(self) -> logging.Logger:
+        logs_dir = Path("logs")
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        logger = logging.getLogger("app.llm_debug")
+        if logger.handlers:
+            return logger
+        logger.setLevel(logging.DEBUG)
+        log_queue: queue.Queue[Any] = queue.Queue(-1)
+        queue_handler = QueueHandler(log_queue)
+        file_handler = logging.FileHandler(logs_dir / "llm_debug.log", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(job_id)s | %(phase)s | %(message)s"))
+        listener = QueueListener(log_queue, file_handler, respect_handler_level=True)
+        listener.daemon = True
+        listener.start()
+        logger.addHandler(queue_handler)
+        logger.propagate = False
+        return logger
+
+    def set_job_state_updater(self, updater):
+        self._job_state_updater = updater
+
+    def set_debug_context_provider(self, provider):
+        self._context_provider = provider
+
+    def _log_debug(self, level: int, message: str, *args, **kwargs):
+        context = self._context_provider() if self._context_provider else {}
+        extra = {
+            "job_id": context.get("job_id") or "-",
+            "phase": context.get("phase") or "-",
+        }
+        self._debug_logger.log(level, message, *args, extra=extra, **kwargs)
+
+    def _update_job_state(self, **updates):
+        if self._job_state_updater:
+            self._job_state_updater(**updates)
 
     def estimate_tokens(self, text: str) -> int:
         return max(1, math.ceil(len(text) / 4))
@@ -86,18 +131,43 @@ class LLMClient:
                             {"role": "user", "content": user},
                         ]
                     async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+                        self._log_debug(
+                            logging.DEBUG,
+                            "LLM request started model=%s base_url=%s api_key_set=%s prompt_length=%s",
+                            self.config.model,
+                            self.config.base_url,
+                            bool(self.config.api_key),
+                            len(f"{system}\n{user}"),
+                        )
                         resp = await client.post(f"{self.config.base_url}/chat/completions", json=request_payload, headers=headers)
+                    response_excerpt = (resp.text or "")[:2000]
+                    self._update_job_state(last_llm_status_code=resp.status_code, last_llm_response_excerpt=response_excerpt)
+                    self._log_debug(logging.DEBUG, "LLM response received status=%s body=%s", resp.status_code, response_excerpt)
                     if resp.status_code == 429:
                         raise httpx.HTTPStatusError("rate limit", request=resp.request, response=resp)
                     if not without_response_format and self._is_response_format_unsupported(resp):
                         continue
                     resp.raise_for_status()
                     content = resp.json()["choices"][0]["message"]["content"]
+                    self._consecutive_failures = 0
+                    self._update_job_state(consecutive_llm_failures=0)
                     return json.loads(content)
                 raise RuntimeError("LLM request exhausted fallback paths")
             except Exception as exc:
                 status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) and exc.response else None
                 error_text = self._error_text(exc.response) if isinstance(exc, httpx.HTTPStatusError) and exc.response else str(exc)
+                response_excerpt = exc.response.text[:2000] if isinstance(exc, httpx.HTTPStatusError) and exc.response else None
+                self._consecutive_failures += 1
+                self._update_job_state(
+                    last_error=str(exc),
+                    llm_failed_increment=1,
+                    last_llm_status_code=status_code,
+                    last_llm_response_excerpt=response_excerpt,
+                    consecutive_llm_failures=self._consecutive_failures,
+                )
+                if self._consecutive_failures > 20:
+                    self._update_job_state(phase="error", running=False)
+                self._log_debug(logging.ERROR, "LLM request failed: %s", str(exc), exc_info=True)
                 self._record_failure(error_text, status_code, request_payload)
                 if attempt == self.config.retries:
                     raise

@@ -26,6 +26,9 @@ def test_run_all_returns_fast_and_sets_running(monkeypatch):
                 "llm_done": 0,
                 "failed": 0,
                 "last_error": None,
+                "last_llm_status_code": None,
+                "last_llm_response_excerpt": None,
+                "consecutive_llm_failures": 0,
                 "started_at": None,
             }
         )
